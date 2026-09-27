@@ -6,18 +6,30 @@
 # -o pipefail: the return value of a pipeline is the status of the last command to exit with a non-zero status, or zero if no command exited with a non-zero status
 set -eu -o pipefail
 
-# save the current directory silently
-pushd . > /dev/null
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+install_dir=/home/steamos/tailscale
+
+if (( EUID != 0 )); then
+  echo "Run this installer as root (sudo bash tailscale.sh)." >&2
+  exit 1
+fi
+
+case "$(uname -m)" in
+  aarch64|arm64) arch=arm64 ;;
+  x86_64|amd64) arch=amd64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 
 # make a temporary directory, save the name, and move into it
 dir="$(mktemp -d)"
+trap 'rm -rf -- "$dir"' EXIT
 cd "${dir}"
 
 echo -n "Getting version..."
 
 # get info for the latest version of Tailscale
-tarball="$(curl -s 'https://pkgs.tailscale.com/stable/?mode=json' | jq -r .Tarballs.amd64)"
-version="$(echo ${tarball} | cut -d_ -f2)"
+tarball="$(curl -fsSL 'https://pkgs.tailscale.com/stable/?mode=json' | jq -er --arg arch "$arch" '.Tarballs[$arch]')"
+version="$(echo "$tarball" | cut -d_ -f2)"
 
 echo "got ${version}."
 
@@ -30,17 +42,17 @@ echo -n "Removing Legacy Installations..."
 
 # Stop and disable the systemd service
 if systemctl is-active --quiet tailscaled; then
-  systemctl stop tailscaled &>/dev/null || echo "ERROR: could not stop tailscaled"
+  systemctl stop tailscaled
 fi
 if systemctl is-enabled --quiet tailscaled; then
-  systemctl disable tailscaled &>/dev/null || echo "ERROR: could not disable tailscaled"
+  systemctl disable tailscaled
 fi
 
 # Remove the systemd system extension
 if [ $(systemd-sysext list 2>/dev/null | grep -c "/var/lib/extensions/tailscale") -ne 0 ]; then
-  systemd-sysext unmerge &>/dev/null || echo "ERROR: could not unmerge system extensions"
+  systemd-sysext unmerge
   rm -rf /var/lib/extensions/tailscale
-  systemd-sysext merge &>/dev/null || echo "ERROR: could not merge system extensions"
+  systemd-sysext merge
 fi
 
 echo "done."
@@ -49,39 +61,34 @@ echo -n "Installing..."
 
 # extract the tailscale binaries
 tar xzf tailscale.tgz
-tar_dir="$(echo ${tarball} | cut -d. -f1-3)"
-test -d $tar_dir
+tar_dir="${tarball%.tgz}"
+test -d "$tar_dir"
 
 # Create binaries directory in home
-mkdir -p /opt/tailscale
+mkdir -p "$install_dir"
 
 # pull binaries
-cp -rf $tar_dir/tailscale /opt/tailscale/tailscale
-cp -rf $tar_dir/tailscaled /opt/tailscale/tailscaled
+install -m 0755 "$tar_dir/tailscale" "$install_dir/tailscale"
+install -m 0755 "$tar_dir/tailscaled" "$install_dir/tailscaled"
 
 # add binaries to path via profile.d
-if ! test -f /etc/profile.d/tailscale.sh; then
-  echo 'PATH="$PATH:/opt/tailscale"' >> /etc/profile.d/tailscale.sh
-  source /etc/profile.d/tailscale.sh
-fi
+echo 'export PATH="$PATH:/home/steamos/tailscale"' > /etc/profile.d/tailscale.sh
+source /etc/profile.d/tailscale.sh
 
 # copy the systemd file into place
-cp -rf $tar_dir/systemd/tailscaled.service /etc/systemd/system/tailscaled.service
+cp -f "$tar_dir/systemd/tailscaled.service" /etc/systemd/system/tailscaled.service
 
 # copy in the defaults file if it doesn't already exist
 if ! test -f /etc/default/tailscaled; then
-  cp -rf $tar_dir/systemd/tailscaled.defaults /etc/default/tailscaled
+  cp -f "$tar_dir/systemd/tailscaled.defaults" /etc/default/tailscaled
 fi
 
 # add atomic-update.conf.d configuration
+mkdir -p /etc/atomic-update.conf.d
 cat <<EOF > /etc/atomic-update.conf.d/tailscale.conf
 /etc/default/tailscaled
 /etc/profile.d/tailscale.sh
 EOF
-
-# return to our original directory (silently) and clean up
-popd > /dev/null
-rm -rf "${dir}"
 
 # if an override file already exists, back up and remove
 if test -f /etc/systemd/system/tailscaled.service.d/override.conf; then
@@ -96,7 +103,7 @@ fi
 
 # copy our override file in
 mkdir -p /etc/systemd/system/tailscaled.service.d
-cp -f override.conf /etc/systemd/system/tailscaled.service.d/override.conf
+cp -f "$script_dir/override.conf" /etc/systemd/system/tailscaled.service.d/override.conf
 
 # capture the above override file in systemd
 systemctl daemon-reload
@@ -108,7 +115,7 @@ echo -n "Starting required services..."
 # tailscaled - the tailscale daemon
 # Note: enable and start/restart must be run because the legacy installation stops and disables
 # any existing installations.
-systemctl enable tailscaled &>/dev/null || echo "ERROR: Could not enable tailscaled service"
+systemctl enable tailscaled
 if systemctl is-active --quiet tailscaled; then
   echo "Upgrade complete."
   echo -n "Restarting tailscaled..."
@@ -118,7 +125,8 @@ else
 fi
 
 # This needs to be the last thing we do in case the user's running this over Tailscale SSH.
-systemctl restart tailscaled &>/dev/null || echo "ERROR: Could not start tailscaled service"
+systemctl restart tailscaled
+systemctl is-active --quiet tailscaled
 
 echo "done."
 
