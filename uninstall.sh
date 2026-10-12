@@ -6,6 +6,13 @@ if (( EUID != 0 )); then
   exit 1
 fi
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+install_dir=/home/.tailscale-bin
+# shellcheck source=security.sh
+source "$script_dir/security.sh"
+check_installation_paths
+check_service_paths
+
 if systemctl is-active --quiet tailscaled; then
   systemctl stop tailscaled
 fi
@@ -22,7 +29,7 @@ fi
 rm -f /etc/default/tailscaled
 rm -f /etc/profile.d/tailscale.sh
 rm -f /etc/atomic-update.conf.d/tailscale.conf
-rm -rf /home/steamos/tailscale
+rm -rf -- "$install_dir"
 
 systemctl daemon-reload
 
