@@ -1,8 +1,13 @@
 # Tailscale on Steam Frame
 
+This repository is based on [sherbondy's frame-tailscale](https://github.com/sherbondy/frame-tailscale)
+at `f44997ee3120edd1035a47dde870aeaf927292be`, with its original history and
+attribution preserved. The local patch secures executable paths and rejects
+unsafe existing paths; it does not change the upstream update/recovery design.
+
 Install Tailscale on Steam Frame without writing to its read-only `/opt`
-filesystem. The CLI and daemon live in `/home/steamos/tailscale`, and systemd
-runs the daemon and enables it at boot.
+filesystem. The CLI and daemon live in root-owned `/home/.tailscale-bin`, and
+systemd runs the daemon and enables it at boot.
 
 The installer downloads the latest stable ARM64 build for Steam Frame. It also
 recognizes x86-64, but the installation paths and instructions target the
@@ -15,11 +20,11 @@ connection (`ssh steamos@frame.local`). You need internet access, sudo access,
 and `git`, `bash`, `curl`, `jq`, `wget`, `tar`, and systemd.
 
 ```sh
-git clone https://github.com/sherbondy/frame-tailscale.git ~/frame-tailscale
+git clone https://github.com/brianytang/frame-tailscale.git ~/frame-tailscale
 cd ~/frame-tailscale
 sudo bash tailscale.sh
 source /etc/profile.d/tailscale.sh
-sudo /home/steamos/tailscale/tailscale up --operator=steamos
+sudo /home/.tailscale-bin/tailscale up --operator=steamos
 ```
 
 Open the printed login URL in a browser and sign in to the same tailnet as your
@@ -108,7 +113,7 @@ not remove the device entry from your Tailscale account.
 
 | Component | Location |
 | --- | --- |
-| CLI and daemon | `/home/steamos/tailscale/tailscale`, `/home/steamos/tailscale/tailscaled` |
+| CLI and daemon | `/home/.tailscale-bin/tailscale`, `/home/.tailscale-bin/tailscaled` |
 | PATH configuration | `/etc/profile.d/tailscale.sh` |
 | Systemd service | `/etc/systemd/system/tailscaled.service` |
 | Systemd override | `/etc/systemd/system/tailscaled.service.d/override.conf` |
@@ -131,7 +136,7 @@ updates. Survival across a SteamOS upgrade has not been verified.
 ## Troubleshooting
 
 - **`tailscale: command not found`:** run `source /etc/profile.d/tailscale.sh`,
-  open a new login shell, or use `/home/steamos/tailscale/tailscale` directly.
+  open a new login shell, or use `/home/.tailscale-bin/tailscale` directly.
 - **`NeedsLogin`:** run the initial `tailscale up` command above and finish the
   browser login.
 - **Legacy iptables/filter-table errors:** rerun the updated installer and check
@@ -142,10 +147,27 @@ updates. Survival across a SteamOS upgrade has not been verified.
 
 ## Validation
 
-Tested on a Steam Frame with Tailscale 1.102.4: installation, uninstallation,
+The upstream author reports testing on a Steam Frame with Tailscale 1.102.4:
+installation, uninstallation,
 reinstallation, service enablement, browser login, tailnet connectivity, and
 visibility in the macOS Tailscale app. Reboot and SteamOS upgrade behavior have
 not been tested.
+
+The security patch has not been installed on a headset. Its path guards are
+checked separately using isolated Linux permission tests.
+
+## Security and existing installations
+
+Root-owned executables must also have root-controlled parent directories. The
+installer and uninstaller reject symlinked, user-owned, or group/other-writable
+installation paths before invoking service cleanup. `/home/steamos` keeps its
+normal ownership; the binaries are outside that user-controlled home.
+
+A loaded service referencing the old `/home/steamos/tailscale` path is refused
+even when the old directory is absent. Migration is manual: first secure the
+old service's executable paths and loaded configuration, then stop it or remove
+its unit. Do not run its cleanup while the old path can be replaced by a user.
+This patch does not automatically uninstall or migrate another installation.
 
 Adapted from [deck-tailscale](https://github.com/tailscale-dev/deck-tailscale)
 and the [original Steam Deck guide](https://tailscale.com/blog/steam-deck).

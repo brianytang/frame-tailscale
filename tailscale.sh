@@ -7,12 +7,17 @@
 set -eu -o pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-install_dir=/home/steamos/tailscale
+install_dir=/home/.tailscale-bin
 
 if (( EUID != 0 )); then
   echo "Run this installer as root (sudo bash tailscale.sh)." >&2
   exit 1
 fi
+
+# shellcheck source=security.sh
+source "$script_dir/security.sh"
+check_installation_paths
+check_service_paths
 
 case "$(uname -m)" in
   aarch64|arm64) arch=arm64 ;;
@@ -65,14 +70,14 @@ tar_dir="${tarball%.tgz}"
 test -d "$tar_dir"
 
 # Create binaries directory in home
-mkdir -p "$install_dir"
+install -d -o root -g root -m 0755 "$install_dir"
 
 # pull binaries
 install -m 0755 "$tar_dir/tailscale" "$install_dir/tailscale"
 install -m 0755 "$tar_dir/tailscaled" "$install_dir/tailscaled"
 
 # add binaries to path via profile.d
-echo 'export PATH="$PATH:/home/steamos/tailscale"' > /etc/profile.d/tailscale.sh
+echo 'export PATH="$PATH:/home/.tailscale-bin"' > /etc/profile.d/tailscale.sh
 source /etc/profile.d/tailscale.sh
 
 # copy the systemd file into place
